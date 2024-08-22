@@ -23,6 +23,28 @@ struct {
   struct run *freelist;
 } kmem;
 
+int getfreemem(void)
+{
+  int count = 0;         // 用于统计空闲内存页的数量
+  struct run *r;         // run 是空闲内存页链表的节点类型
+
+  // 锁定 kmem，确保对内存空闲链表操作的安全性
+  acquire(&kmem.lock);
+  
+  r = kmem.freelist;     // freelist 是指向空闲内存页链表头的指针
+  while (r)
+  {
+    count++;             // 每找到一个空闲页，计数器加一
+    r = r->next;         // 继续遍历下一个空闲页
+  }
+
+  // 释放 kmem 的锁
+  release(&kmem.lock);
+
+  // 返回空闲内存的总大小，单位为字节
+  return count * PGSIZE;
+}
+
 void
 kinit()
 {

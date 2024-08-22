@@ -289,6 +289,8 @@ fork(void)
   }
   np->sz = p->sz;
 
+  np->trace_mask=p->trace_mask;
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -654,3 +656,26 @@ procdump(void)
     printf("\n");
   }
 }
+
+int getnproc(void)
+{
+  struct proc *p;        // proc 是指向进程表中某个进程的指针
+  int count = 0;         // 用于统计正在运行的进程数
+
+  // 遍历进程表，统计非 UNUSED 状态的进程数
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    acquire(&p->lock);   // 锁定进程，避免其他进程同时修改它的状态
+
+    if (p->state != UNUSED)
+    {
+      count++;           // 非 UNUSED 状态表示该进程正在运行
+    }
+
+    release(&p->lock);   // 释放进程的锁
+  }
+
+  // 返回正在运行的进程数量
+  return count;
+}
+
