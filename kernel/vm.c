@@ -6,6 +6,7 @@
 #include "defs.h"
 #include "fs.h"
 
+void vmprint(pagetable_t pagetable);
 /*
  * the kernel's page table.
  */

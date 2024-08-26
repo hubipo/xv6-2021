@@ -75,13 +75,53 @@ sys_sleep(void)
   return 0;
 }
 
+extern pte_t *walk(pagetable_t, uint64, int);
 
 #ifdef LAB_PGTBL
 int
 sys_pgaccess(void)
 {
-  // lab pgtbl: your code here.
-  return 0;
+  uint64 srcva, st;
+    int len;
+    uint64 buf = 0;
+    struct proc *p = myproc();
+
+    // 获取系统调用参数
+    if (argaddr(0, &srcva) < 0 || argint(1, &len) < 0 || argaddr(2, &st) < 0) {
+        return -1;
+    }
+
+    // 参数验证
+    if (len <= 0 || len > 64) {
+        return -1;
+    }
+
+    acquire(&p->lock);  // 锁住进程以确保页表访问的安全性
+
+    for (int i = 0; i < len; i++) {
+        pte_t *pte = walk(p->pagetable, srcva + i * PGSIZE, 0);
+        
+        // 检查 PTE 是否有效和用户访问权限
+        if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U)) {
+            release(&p->lock);
+            return -1;
+        }
+
+        // 如果页面被访问过，设置对应的位
+        if (*pte & PTE_A) {
+            *pte &= ~PTE_A;  // 清除访问标志
+            buf |= (1UL << i);  // 在 buf 中设置相应的位
+        }
+    }
+
+    release(&p->lock);  // 解锁进程
+
+    // 将结果拷贝到用户空间
+    if (copyout(p->pagetable, st, (char *)&buf, (len + 7) / 8) < 0) {
+        return -1;
+    }
+
+    return 0;
 }
 #endif
 
@@ -107,3 +147,6 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+
+

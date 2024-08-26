@@ -32,7 +32,7 @@ struct spinlock wait_lock;
 void
 proc_mapstacks(pagetable_t kpgtbl) {
   struct proc *p;
-  
+
   for(p = proc; p < &proc[NPROC]; p++) {
     char *pa = kalloc();
     if(pa == 0)
@@ -47,7 +47,7 @@ void
 procinit(void)
 {
   struct proc *p;
-  
+
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
@@ -88,7 +88,7 @@ myproc(void) {
 int
 allocpid() {
   int pid;
-  
+
   acquire(&pid_lock);
   pid = nextpid;
   nextpid = nextpid + 1;
@@ -119,6 +119,17 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+
+ // 为 usyscall 结构分配内存页
+p->usyscall = (struct usyscall *)kalloc();
+if (p->usyscall == 0) {
+    freeproc(p);           // 释放已分配的资源
+    release(&p->lock);     // 释放锁，避免死锁
+    return 0;              // 返回 0 表示分配失败
+}
+
+// 初始化 usyscall 结构中的 pid 字段
+p->usyscall->pid = p->pid;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -164,6 +175,13 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  // 释放 usyscall 页
+if (p->usyscall) {
+    kfree((void *)p->usyscall);  // 释放分配的内存页
+}
+p->usyscall = 0;                 // 重置指针，避免悬空指针问题
+
+
 }
 
 // Create a user page table for a given process,
@@ -177,6 +195,14 @@ proc_pagetable(struct proc *p)
   pagetable = uvmcreate();
   if(pagetable == 0)
     return 0;
+
+ // 将 usyscall 页映射到用户空间的 USYSCALL 地址，只读
+if (mappages(pagetable, USYSCALL, PGSIZE,
+             (uint64)(p->usyscall), PTE_R | PTE_U) < 0) {
+    uvmfree(pagetable, 0);  // 释放页表，避免内存泄露
+    return 0;               // 返回 0 表示映射失败
+}
+
 
   // map the trampoline code (for system call return)
   // at the highest user virtual address.
@@ -206,6 +232,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, USYSCALL, 1, 0); // add
   uvmfree(pagetable, sz);
 }
 
@@ -229,7 +256,7 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
@@ -365,7 +392,7 @@ exit(int status)
 
   // Parent might be sleeping in wait().
   wakeup(p->parent);
-  
+
   acquire(&p->lock);
 
   p->xstate = status;
@@ -421,7 +448,7 @@ wait(uint64 addr)
       release(&wait_lock);
       return -1;
     }
-    
+
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
@@ -439,7 +466,7 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-  
+
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
@@ -529,7 +556,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be
