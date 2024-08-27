@@ -25,6 +25,8 @@ int sleep(int);
 int uptime(void);
 
 // ulib.c
+//typedef unsigned int   uint;
+
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);
 void *memmove(void*, const void*, int);
