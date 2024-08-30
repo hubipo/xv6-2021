@@ -76,44 +76,42 @@ kfree(void *pa)
 }
 
 struct run *steal(int cpu_id) {
-    int i;
     int c = cpu_id;
     struct run *fast, *slow, *head;
-    // 若传递的cpuid和实际运行的cpuid出现不一致,则引发panic
-    // 加入该判断以检查在kalloc()调用steal时CPU不会被切换
-    if(cpu_id != cpuid()) {
-      panic("steal");
-    }    
-    // 遍历其他NCPU-1个CPU的空闲物理页链表 
-    for (i = 1; i < NCPU; ++i) {
-        if (++c == NCPU) {
-            c = 0;
-        }
+
+    // 确认当前 CPU ID 未发生变化，否则触发 panic
+    if (cpu_id != cpuid()) {
+        panic("steal");
+    }
+
+    // 遍历其他 CPU 的空闲内存链表，尝试获取可用页
+    for (int i = 1; i < NCPU; ++i) {
+        c = (c + 1) % NCPU;
+
         acquire(&kmems[c].lock);
-        // 若链表不为空
+
         if (kmems[c].freelist) {
-            // 快慢双指针算法将链表一分为二
+            // 使用快慢指针拆分链表
             slow = head = kmems[c].freelist;
             fast = slow->next;
-            while (fast) {
-                fast = fast->next;
-                if (fast) {
-                    slow = slow->next;
-                    fast = fast->next;
-                }
+
+            while (fast && fast->next) {
+                slow = slow->next;
+                fast = fast->next->next;
             }
-            // 后半部分作为当前CPU的空闲链表
+
+            // 将链表后半部分留给原 CPU，其余部分作为当前 CPU 的空闲页
             kmems[c].freelist = slow->next;
+            slow->next = 0; // 断开与后半部分的链接
+
             release(&kmems[c].lock);
-            // 前半部分的链表结尾清空,由于该部分链表与其他链表不再关联,因此无需加锁
-            slow->next = 0;
-            // 返回前半部分的链表头
-            return head;
+            return head; // 返回当前 CPU 可用的链表头
         }
+
         release(&kmems[c].lock);
     }
-    // 若其他CPU物理页均为空则返回空指针
-    return 0;
+
+    return 0; // 所有 CPU 均无可用页时返回 NULL
 }
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.

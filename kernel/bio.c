@@ -59,93 +59,83 @@ binit(void)
 // Look through buffer cache for block on device dev.
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
-static struct buf*
-bget(uint dev, uint blockno)
-{
-  struct buf *b;
-  // lab8-2
-  int idx = HASH(blockno);
-  struct buf *pre, *minb = 0, *minpre;
-  uint mintimestamp;
-  int i;
-  
-  // loop up the buf in the buckets[idx]
-  acquire(&bcache.locks[idx]);  // lab8-2
-  for(b = bcache.buckets[idx].next; b; b = b->next){
-    if(b->dev == dev && b->blockno == blockno){
-      b->refcnt++;
-      release(&bcache.locks[idx]);  // lab8-2
-      acquiresleep(&b->lock);
-      return b;
+static struct buf* bget(uint dev, uint blockno) {
+    struct buf *b, *pre = 0, *minb = 0, *minpre = 0;
+    uint mintimestamp = -1;
+    int idx = HASH(blockno);
+
+    // 在目标桶中查找缓冲区
+    acquire(&bcache.locks[idx]);
+    for (b = bcache.buckets[idx].next; b; b = b->next) {
+        if (b->dev == dev && b->blockno == blockno) {
+            b->refcnt++;
+            release(&bcache.locks[idx]);
+            acquiresleep(&b->lock);
+            return b;
+        }
     }
-  }
-
-  // Not cached.
-  // check if there is a buf not used -lab8-2
-  acquire(&bcache.lock);
-  if(bcache.size < NBUF) {
-    b = &bcache.buf[bcache.size++];
-    release(&bcache.lock);
-    b->dev = dev;
-    b->blockno = blockno;
-    b->valid = 0;
-    b->refcnt = 1;
-    b->next = bcache.buckets[idx].next;
-    bcache.buckets[idx].next = b;
     release(&bcache.locks[idx]);
-    acquiresleep(&b->lock);
-    return b;
-  }
-  release(&bcache.lock);
-  release(&bcache.locks[idx]);
 
-  // select the last-recently used block int the bucket
-  //based on the timestamp - lab8-2
-  acquire(&bcache.hashlock);
-  for(i = 0; i < NBUCKET; ++i) {
-      mintimestamp = -1;
-      acquire(&bcache.locks[idx]);
-      for(pre = &bcache.buckets[idx], b = pre->next; b; pre = b, b = b->next) {
-          // research the block
-          if(idx == HASH(blockno) && b->dev == dev && b->blockno == blockno){
-              b->refcnt++;
-              release(&bcache.locks[idx]);
-              release(&bcache.hashlock);
-              acquiresleep(&b->lock);
-              return b;
-          }
-          if(b->refcnt == 0 && b->timestamp < mintimestamp) {
-              minb = b;
-              minpre = pre;
-              mintimestamp = b->timestamp;
-          }
-      }
-      // find an unused block
-      if(minb) {
-          minb->dev = dev;
-          minb->blockno = blockno;
-          minb->valid = 0;
-          minb->refcnt = 1;
-          // if block in another bucket, we should move it to correct bucket
-          if(idx != HASH(blockno)) {
-              minpre->next = minb->next;    // remove block
-              release(&bcache.locks[idx]);
-              idx = HASH(blockno);  // the correct bucket index
-              acquire(&bcache.locks[idx]);
-              minb->next = bcache.buckets[idx].next;    // move block to correct bucket
-              bcache.buckets[idx].next = minb;
-          }
-          release(&bcache.locks[idx]);
-          release(&bcache.hashlock);
-          acquiresleep(&minb->lock);
-          return minb;
-      }
-      release(&bcache.locks[idx]);
-      if(++idx == NBUCKET) {
-          idx = 0;
-      }
-  }
-  panic("bget: no buffers");
+    // 缓冲区未缓存，尝试分配新的缓冲区
+    acquire(&bcache.lock);
+    if (bcache.size < NBUF) {
+        b = &bcache.buf[bcache.size++];
+        release(&bcache.lock);
+        b->dev = dev;
+        b->blockno = blockno;
+        b->valid = 0;
+        b->refcnt = 1;
+        b->next = bcache.buckets[idx].next;
+        bcache.buckets[idx].next = b;
+        acquiresleep(&b->lock);
+        return b;
+    }
+    release(&bcache.lock);
+
+    // 查找未使用的最近最少使用 (LRU) 块
+    acquire(&bcache.hashlock);
+    for (int i = 0; i < NBUCKET; i++) {
+        acquire(&bcache.locks[idx]);
+        for (pre = &bcache.buckets[idx], b = pre->next; b; pre = b, b = b->next) {
+            if (b->dev == dev && b->blockno == blockno) {
+                b->refcnt++;
+                release(&bcache.locks[idx]);
+                release(&bcache.hashlock);
+                acquiresleep(&b->lock);
+                return b;
+            }
+            if (b->refcnt == 0 && (minb == 0 || b->timestamp < mintimestamp)) {
+                minb = b;
+                minpre = pre;
+                mintimestamp = b->timestamp;
+            }
+        }
+
+        // 如果找到未使用的块
+        if (minb) {
+            minb->dev = dev;
+            minb->blockno = blockno;
+            minb->valid = 0;
+            minb->refcnt = 1;
+            // 如果块不在正确的桶中，将其移到正确的桶
+            if (idx != HASH(blockno)) {
+                minpre->next = minb->next;
+                release(&bcache.locks[idx]);
+                idx = HASH(blockno);
+                acquire(&bcache.locks[idx]);
+                minb->next = bcache.buckets[idx].next;
+                bcache.buckets[idx].next = minb;
+            }
+            release(&bcache.locks[idx]);
+            release(&bcache.hashlock);
+            acquiresleep(&minb->lock);
+            return minb;
+        }
+        release(&bcache.locks[idx]);
+        idx = (idx + 1) % NBUCKET;
+    }
+
+    panic("bget: no buffers");
 }
 
 // Return a locked buf with the contents of the indicated block.
