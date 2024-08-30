@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"  // lab10
+#include "fs.h"     // lab10
+#include "file.h"   // lab10
+#include "fcntl.h"  // lab10
 
 struct spinlock tickslock;
 uint ticks;
@@ -33,55 +37,85 @@ trapinithart(void)
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
-void
-usertrap(void)
+void usertrap(void)
 {
   int which_dev = 0;
 
-  if((r_sstatus() & SSTATUS_SPP) != 0)
+  if ((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
-  // send interrupts and exceptions to kerneltrap(),
-  // since we're now in the kernel.
+  // Set the trap vector to kerneltrap for handling interrupts and exceptions in the kernel.
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
   
-  // save user program counter.
+  // Save the user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
-    // system call
-
-    if(p->killed)
+  if (r_scause() == 8) {
+    // Handle system call
+    if (p->killed)
       exit(-1);
 
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
+    // Advance the program counter to skip the ecall instruction.
     p->trapframe->epc += 4;
-
-    // an interrupt will change sstatus &c registers,
-    // so don't enable until done with those registers.
-    intr_on();
-
+    intr_on();  // Enable interrupts.
     syscall();
-  } else if((which_dev = devintr()) != 0){
-    // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+  } else if (r_scause() == 12 || r_scause() == 13 || r_scause() == 15) {
+    // Handle page fault
+    uint64 va = PGROUNDDOWN(r_stval());
+    struct vm_area *vma = 0;
+    int flags = PTE_U;
+
+    for (int i = 0; i < NVMA; ++i) {
+      if (p->vma[i].addr && va >= p->vma[i].addr && va < p->vma[i].addr + p->vma[i].len) {
+        vma = &p->vma[i];
+        break;
+      }
+    }
+
+    if (!vma) goto err;
+
+    if (r_scause() == 15 && (vma->prot & PROT_WRITE) && walkaddr(p->pagetable, va)) {
+      if (uvmsetdirtywrite(p->pagetable, va)) goto err;
+    } else {
+      char *pa = kalloc();
+      if (!pa) goto err;
+      memset(pa, 0, PGSIZE);
+      ilock(vma->f->ip);
+      if (readi(vma->f->ip, 0, (uint64)pa, va - vma->addr + vma->offset, PGSIZE) < 0) {
+        iunlock(vma->f->ip);
+        goto err;
+      }
+      iunlock(vma->f->ip);
+
+      if (vma->prot & PROT_READ) flags |= PTE_R;
+      if (r_scause() == 15 && (vma->prot & PROT_WRITE)) flags |= PTE_W | PTE_D;
+      if (vma->prot & PROT_EXEC) flags |= PTE_X;
+
+      if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, flags) != 0) {
+        kfree(pa);
+        goto err;
+      }
+    }
+  } else if ((which_dev = devintr()) == 0) {
+    goto err;
   }
 
-  if(p->killed)
-    exit(-1);
+  if (p->killed) exit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  if (which_dev == 2) yield();
 
   usertrapret();
+
+  return;
+
+err:
+  printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+  printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+  p->killed = 1;
 }
+
 
 //
 // return to user space
@@ -217,4 +251,3 @@ devintr()
     return 0;
   }
 }
-

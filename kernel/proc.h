@@ -17,7 +17,7 @@ struct context {
   uint64 s10;
   uint64 s11;
 };
-
+#define NVMA 16   
 // Per-CPU state.
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
@@ -27,6 +27,15 @@ struct cpu {
 };
 
 extern struct cpu cpus[NCPU];
+// Virtual Memory Area - lab10
+struct vm_area {
+    uint64 addr;    // mmap address
+    int len;    // mmap memory length
+    int prot;   // permission
+    int flags;  // the mmap flags
+    int offset; // the file offset
+    struct file* f;     // pointer to the mapped file
+};
 
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
@@ -79,7 +88,7 @@ struct trapframe {
   /* 272 */ uint64 t5;
   /* 280 */ uint64 t6;
 };
-
+  
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -105,4 +114,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct vm_area vma[NVMA];   
 };
