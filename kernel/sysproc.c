@@ -98,11 +98,11 @@ sys_uptime(void)
 }
 uint64 sys_sigreturn(void) {
     struct proc* p = myproc();
-    // trapframecopy must have the copy of trapframe
+     // trapframecopy must have the copy of trapframe
     if(p->trapframecopy != p->trapframe + 512) {
         return -1;
     }
-    memmove(p->trapframe, p->trapframecopy, sizeof(struct trapframe));   // restore the trapframe
+    memmove(p->trapframe, p->trapframecopy, sizeof(struct trapframe));   // prevent re-entrant
     p->passedticks = 0;     // prevent re-entrant
     p->trapframecopy = 0;    // 置零
     return p->trapframe->a0;	// 返回a0,避免被返回值覆盖
@@ -116,7 +116,6 @@ uint64 sys_sigalarm(void) {
     if (argint(0, &interval) < 0 || argaddr(1, &handler) < 0 || interval < 0) {
         return -1;
     }
-    // lab4-3
     p = myproc();
     p->interval = interval;
     p->handler = handler;
